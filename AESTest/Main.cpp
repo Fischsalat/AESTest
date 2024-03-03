@@ -19,6 +19,7 @@ using namespace UC;
 template<typename T>
 inline T* ToIdaAdddress(T* Value)
 {
+	// For debugging, set the address on the right to your dumps ImageBase
 	return reinterpret_cast<T*>((reinterpret_cast<uintptr_t>(Value) - GetImageBase()) + 0x07FF6DEC40000ull);
 }
 
@@ -78,7 +79,7 @@ public:
 			ret << std::hex << std::uppercase << std::setfill('0') << std::setw(2) << static_cast<int>(KeyBytes[i]);
 		}
 
-		return ret.str();
+		return "0x" + ret.str();
 	}
 };
 struct FOldAESKey
@@ -142,30 +143,49 @@ void DecryptDataHook(uint32* ExpandedKey, uint32 NumRounds, uint8* OutDecryptedD
 	DecryptionLock.unlock();
 }
 
-inline uint64(*OgSomeFunc)(uint8* a1, FAESKey& a2) = nullptr;
+/* For nicer console ouput, so we're not trying to log from 5 different threads at the same time mashing together our debug messages */
+std::mutex ExpandAESKeyLock;
 
-uint64 SomeFuncHook(uint8* a1, FAESKey& Key)
+/* Pointer to the Original ExpandAESKey function that was not replaced by our hook */
+inline uint64(*OriginalExpandAESKey)(uint8* a1, FAESKey& a2) = nullptr;
+
+/*
+* Fortnite specific function to expand the AES-Key before using the expanded Key to decrypt data.
+* 
+* Return: NumRounds --> Number of rounds required by the decryption-algorithm. In UE source this is hardcoded '#define AES256_ROUND_COUNT 14'
+* 
+* Param 1: OutExpandedKey --> Actually of type FAesExpandedKey*, but we don't need the type
+* Param 2: UnexpandedKey --> The key we've been looking for. Actually passed as a 'const uint8*', but it can be used as 'FAESKey&' safely, as the pointer points to the buffer of an FAESKey
+*/
+uint64 ExpandAESKeyHook(uint8* OutExpandedKey, FAESKey& UnexpandedKey)
 {
-	DecryptionLock.lock();
+	/* Make sure only one thread logs - or inserts into the map - at a time*/
+	ExpandAESKeyLock.lock();
 
 	static std::unordered_set<std::string> UniqueKeys;
 
-	auto [It, bInserted] = UniqueKeys.insert(Key.ToString());
+	auto [It, bInserted] = UniqueKeys.insert(UnexpandedKey.ToString());
 	if (bInserted)
 	{
-		std::cout << Key.ToString() << std::endl;
-		std::cout << "Value of a1: " << (void*)a1 << std::endl;
-		std::cout << "Value of a2: " << (void*)&Key << std::endl;
-		std::cout << "Ret: " << ToIdaAdddress(_ReturnAddress()) << std::endl;
+		/* */
+		std::cout << UnexpandedKey.ToString() << std::endl;
+
+		/* 
+		* Print the parameters to make sure IDAs guessed types are correct. Also to be able to look at the values in Reclass
+		* 
+		* These print statements were mostly useful when I didn't already know what function I'm dealing with and what the parameters are.
+		*/
+		std::cout << "Value of a1: " << reinterpret_cast<void*>(OutExpandedKey) << std::endl;
+		std::cout << "Value of a2: " << reinterpret_cast<void*>(&UnexpandedKey) << std::endl;
 	}
 
-	uint64 Dummy = OgSomeFunc(a1, Key);
+	/* This is always 14 (0xE), the number of Rounds required by the decryption algorithm */
+	uint64 ExpandKeyReturnValue = OriginalExpandAESKey(OutExpandedKey, UnexpandedKey);
 
-	DecryptionLock.unlock();
+	ExpandAESKeyLock.unlock();
 
-	return Dummy;
+	return ExpandKeyReturnValue;
 }
-
 
 
 inline void (*OgDecryptDataOld)(uint8* Contents, uint32 NumBytes, const uint8* KeyBytes, uint32 NumKeyBytes) = nullptr;
@@ -335,59 +355,34 @@ DWORD MainThread(HMODULE Module)
 	//std::cout << "PakMountAddress " << GetDecryptionKeyAddress << std::endl;
 	//std::cout << "Key " << Key.ToString() << std::endl;
 
-	//MH_STATUS CreateHookStatus = MH_CreateHook(GetDecryptionKeyAddress, GetDecryptionKeyHook, reinterpret_cast<void**>(&OgGetDecryptionKey));
-	//if (CreateHookStatus != MH_OK)
-	//{
-	//	std::cout << "PakMountHook create failed: " << MH_StatusToString(CreateHookStatus) << std::endl;
-	//	return 0;
-	//}
-	//
-	//MH_STATUS EnableHookStatus = MH_EnableHook(GetDecryptionKeyAddress);
-	//if (EnableHookStatus != MH_OK)
-	//{
-	//	std::cout << "PakMountHook eable failed: " << MH_StatusToString(EnableHookStatus) << std::endl;
-	//	return 0;
-	//}
 
-	// Uncomment this for PackMount
-	/*
-	void* PakMountAddress = reinterpret_cast<void*>(GetImageBase() + 0x100BEE0); // 28.20 (v2)
-
-	std::cout << "PakMountAddress " << PakMountAddress << std::endl;
-
-	MH_STATUS CreateHookStatus = MH_CreateHook(PakMountAddress, PakMountHook, reinterpret_cast<void**>(&FPakPlatformFile_Mount));
-	if (CreateHookStatus != MH_OK)
-	{
-		std::cout << "PakMountHook create failed: " << MH_StatusToString(CreateHookStatus) << std::endl;
-		return 0;
-	}
-
-	MH_STATUS EnableHookStatus = MH_EnableHook(PakMountAddress);
-	if (EnableHookStatus != MH_OK)
-	{
-		std::cout << "PakMountHook eable failed: " << MH_StatusToString(EnableHookStatus) << std::endl;
-		return 0;
-	}
+	/* Signature for instructions bytes used by Fortnites 'uint64 AesEncryptExpand(FAesExpandedKey* OutExpandedKey, const FAESKey& UnexpandedKey)' */
+	void* AesEncryptExpandAddress = FindPattern("48 89 5C 24 ? 48 89 74 24 ? 48 89 7C 24 ? 0F B6 42 ? 48 8B F9");
+	
+	/* 
+	* If 'AesEncryptExpandAddress' wasn't found try looking for 'uint64 AesDecryptExpand(FAesExpandedKey* OutExpandedKey, const FAESKey& UnexpandedKey)'.
+	* 
+	* We can do this because the function signature (return type and parameters) is the same on both functions, so we can re-use our hook.
 	*/
+	if (AesEncryptExpandAddress == nullptr)
+		AesEncryptExpandAddress = FindPattern("40 53 48 83 EC ? 48 8B D9 E8 ? ? ? ? 45 33 DB 44 8B D0");
 
+	std::cout << "AesEncryptExpandAddress: " << AesEncryptExpandAddress << std::endl;
 	
-	void* SomeFuncAddress = reinterpret_cast<void*>(GetImageBase() + 0x17133D0); // 28.30
-	
-	std::cout << "SomeFuncAddress " << SomeFuncAddress << std::endl;
-	
-	MH_STATUS CreateHookStatus = MH_CreateHook(SomeFuncAddress, SomeFuncHook, reinterpret_cast<void**>(&OgSomeFunc));
+	MH_STATUS CreateHookStatus = MH_CreateHook(AesEncryptExpandAddress, ExpandAESKeyHook, reinterpret_cast<void**>(&OriginalExpandAESKey));
 	if (CreateHookStatus != MH_OK)
 	{
 		std::cout << "MH_Initialize failed: " << MH_StatusToString(CreateHookStatus) << std::endl;
 		return 0;
 	}
 	
-	MH_STATUS EnableHookStatus = MH_EnableHook(SomeFuncAddress);
+	MH_STATUS EnableHookStatus = MH_EnableHook(AesEncryptExpandAddress);
 	if (EnableHookStatus != MH_OK)
 	{
 		std::cout << "MH_Initialize failed: " << MH_StatusToString(EnableHookStatus) << std::endl;
 		return 0;
 	}
+
 
 	//void* DecryptDataAddress = reinterpret_cast<void*>(GetImageBase() + 0xBF3C20); // AESTest
 	//void* DecryptDataAddress = reinterpret_cast<void*>(GetImageBase() + 0x16A4D04); // 28.20 (v2)
