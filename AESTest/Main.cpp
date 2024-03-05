@@ -1,20 +1,28 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <Windows.h>
-#include <iostream>
-#include <chrono>
-#include <fstream>
-#include <mutex>
 #include <intrin.h>
+#include <iostream>
+#include <fstream>
+#include <chrono>
+#include <format>
+#include <mutex>
 
 #include "Utils.h"
 #include "MinHook.h"
 
-#include "ContainersRewrite.h"
-
 #pragma comment(lib, "libMinHook-x64-v141-mt.lib")
 
-using namespace UC;
+
+typedef int8_t int8;
+typedef int16_t int16;
+typedef int32_t int32;
+typedef int64_t int64;
+
+typedef uint8_t uint8;
+typedef uint16_t uint16;
+typedef uint32_t uint32;
+typedef uint64_t uint64;
 
 template<typename T>
 inline T* ToIdaAdddress(T* Value)
@@ -167,8 +175,13 @@ uint64 ExpandAESKeyHook(uint8* OutExpandedKey, FAESKey& UnexpandedKey)
 	auto [It, bInserted] = UniqueKeys.insert(UnexpandedKey.ToString());
 	if (bInserted)
 	{
-		/* */
-		std::cout << UnexpandedKey.ToString() << std::endl;
+		/* Prints the bytes of the Key as hex-numbers  */
+		std::cout << "\n\n\nAES-Key: " << UnexpandedKey.ToString() << "\n\n\n" << std::endl;
+
+		/* Append the key to AESKey.txt */
+		std::ofstream AESFile("AESKey.txt", std::ios::app);
+		AESFile << "Key: " << UnexpandedKey.ToString() << std::endl;
+		AESFile.close();
 
 		/* 
 		* Print the parameters to make sure IDAs guessed types are correct. Also to be able to look at the values in Reclass
@@ -205,75 +218,6 @@ void DecryptDataOldHook(uint8* Contents, uint32 NumBytes, const uint8* KeyBytes,
 	return OgDecryptDataOld(Contents, NumBytes, KeyBytes, NumKeyBytes);
 }
 
-struct FPakPlatformFile
-{
-	struct FPakListEntry
-	{
-		uint32 ReadOrder;
-		void* PakFile;
-	};
-
-	struct FPakListDeferredEntry
-	{
-		FString Filename;
-		FString Path;
-		uint32 ReadOrder;
-		FGuid EncryptionKeyGuid;
-		int32 PakchunkIndex;
-	};
-
-private:
-	uint8 Pad[0x8];
-
-public:
-	/** List of all available pak files. */
-	TArray<FPakListEntry> PakFiles;
-
-	/** List of all pak filenames with dynamic encryption where we don't have the key yet */
-	TArray<FPakListDeferredEntry> PendingEncryptedPakFiles;
-
-	/** True if this we're using signed content. */
-	bool bSigned;
-
-	// Rest is ignored
-};
-
-std::mutex PakMountLock;
-
-inline bool (*FPakPlatformFile_Mount)(void* ThisPak, const TCHAR* InPakFilename, uint32 PakOrder, const TCHAR* InPath /*= nullptr*/, bool bLoadIndex /*= true*/, void* OutPakListEntry /*= nullptr*/) = nullptr;
-
-bool PakMountHook(FPakPlatformFile* ThisPak, const TCHAR* InPakFilename, uint32 PakOrder, const TCHAR* InPath /*= nullptr*/, bool bLoadIndex /*= true*/, void* OutPakListEntry /*= nullptr*/)
-{
-	PakMountLock.lock();
-
-	// Pre-processing of params
-
-	if (InPakFilename)
-		std::wcout << std::format(L"Mounting Pak: {}", InPakFilename) << std::endl;
-
-	const int32 NumPakFiles = ThisPak->PakFiles.Num();
-	const int32 NumPendingFiles = ThisPak->PendingEncryptedPakFiles.Num();
-
-	bool bResult = FPakPlatformFile_Mount(ThisPak, InPakFilename, PakOrder, InPath, bLoadIndex, OutPakListEntry);
-
-	std::cout << std::format("bMountedSucessfully: {}", bResult) << std::endl;
-
-	// Post-processing of params
-
-	const int32 NewNumPakFiles = ThisPak->PakFiles.Num();
-	const int32 NewNumPendingFiles = ThisPak->PendingEncryptedPakFiles.Num();
-
-	if (NewNumPakFiles > NumPakFiles)
-	{
-	}
-	if (NewNumPendingFiles > NumPendingFiles)
-	{
-	}
-
-
-	PakMountLock.unlock();
-	return bResult;
-}
 
 inline void(*OgGetDecryptionKey)(unsigned char* OutKey);
 
@@ -319,9 +263,6 @@ DWORD MainThread(HMODULE Module)
 	FILE* Dummy;
 	freopen_s(&Dummy, "CONOUT$", "w", stdout);
 	freopen_s(&Dummy, "CONIN$", "r", stdin);
-
-	constexpr int32 ReallocOffset = 0x43DC21C;
-	FMemory::Init(reinterpret_cast<void*>(GetImageBase() + ReallocOffset));
 
 	MH_STATUS InitStatus = MH_Initialize();
 	if (InitStatus != MH_OK)
