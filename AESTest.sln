@@ -4,6 +4,11 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 VisualStudioVersion = 16.0.33927.289
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "AESTest", "AESTest\AESTest.vcxproj", "{47FDFF17-B343-40F5-A5FC-BE490BAC36CD}"
+	ProjectSection(ProjectDependencies) = postProject
+		{309E0CD6-3464-4336-A469-F498C9853635} = {309E0CD6-3464-4336-A469-F498C9853635}
+	EndProjectSection
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TsudaKageyu's Minhook", "TsudaKageyu's Minhook\TsudaKageyu's Minhook.vcxproj", "{309E0CD6-3464-4336-A469-F498C9853635}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -21,6 +26,14 @@ Global
 		{47FDFF17-B343-40F5-A5FC-BE490BAC36CD}.Release|x64.Build.0 = Release|x64
 		{47FDFF17-B343-40F5-A5FC-BE490BAC36CD}.Release|x86.ActiveCfg = Release|Win32
 		{47FDFF17-B343-40F5-A5FC-BE490BAC36CD}.Release|x86.Build.0 = Release|Win32
+		{309E0CD6-3464-4336-A469-F498C9853635}.Debug|x64.ActiveCfg = Debug|x64
+		{309E0CD6-3464-4336-A469-F498C9853635}.Debug|x64.Build.0 = Debug|x64
+		{309E0CD6-3464-4336-A469-F498C9853635}.Debug|x86.ActiveCfg = Debug|Win32
+		{309E0CD6-3464-4336-A469-F498C9853635}.Debug|x86.Build.0 = Debug|Win32
+		{309E0CD6-3464-4336-A469-F498C9853635}.Release|x64.ActiveCfg = Release|x64
+		{309E0CD6-3464-4336-A469-F498C9853635}.Release|x64.Build.0 = Release|x64
+		{309E0CD6-3464-4336-A469-F498C9853635}.Release|x86.ActiveCfg = Release|Win32
+		{309E0CD6-3464-4336-A469-F498C9853635}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

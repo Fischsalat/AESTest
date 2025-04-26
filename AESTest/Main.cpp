@@ -9,9 +9,9 @@
 #include <mutex>
 
 #include "Utils.h"
-#include "MinHook.h"
+#include "../Include/MinHook.h"
 
-#pragma comment(lib, "libMinHook-x64-v141-mt.lib")
+#pragma comment(lib, "TsudaKageyu's Minhook.lib")
 
 
 typedef int8_t int8;
@@ -122,31 +122,20 @@ public:
 /* For nicer console ouput, so we're not trying to log from 5 different threads at the same time mashing together our debug messages */
 std::mutex DecryptionLock;
 
-inline void (*OgDecryptData)(uint32* EncryptedData, uint32 NumRounds, uint8* OutDecryptedData) = nullptr;
+inline void (*OgDecryptData)(uint8* Content, uint64 NumBytes, const uint8* KeyBytes, uint32 NumKeyBytes) = nullptr;
 
-void DecryptDataHook(uint32* ExpandedKey, uint32 NumRounds, uint8* OutDecryptedData)
+void DecryptDataHook(uint8* Content, uint64 NumBytes, const uint8* KeyBytes, uint32 NumKeyBytes)
 {
 	DecryptionLock.lock();
 
+	FOldAESKey Key(KeyBytes, NumKeyBytes);
 
-	std::string keyString = "0x";
-
-	for (int i = 0; i < NumRounds; ++i)
-	{
-		keyString += std::format("{:X}", ExpandedKey[i]);
-	}
-
-	std::cout << "Found AES key: " << keyString << std::endl;
-
-	std::cout << "As AESKey: " << reinterpret_cast<FAESKey*>(ExpandedKey)->ToString() << std::endl;
-	std::cout << "Executing hook with EncryptedData: " << reinterpret_cast<void*>(ExpandedKey) << std::endl;
-	std::cout << "Executing hook with NumRounds: " << NumRounds << std::endl;
-	std::cout << "Executing hook with a3: " << reinterpret_cast<void*>(OutDecryptedData) << std::endl;
+	std::cout << "As AESKey: 0x" << Key.ToString() << std::endl;
 
 	std::cout << "RET: " << _ReturnAddress() << std::endl;
 	std::cout << "Ida-RET: " << ToIdaAdddress(_ReturnAddress()) << std::endl;
 
-	OgDecryptData(ExpandedKey, NumRounds, OutDecryptedData);
+	OgDecryptData(Content, NumBytes, KeyBytes, NumKeyBytes);
 
 	DecryptionLock.unlock();
 }
@@ -298,26 +287,18 @@ DWORD MainThread(HMODULE Module)
 
 
 	/* Signature for instructions bytes used by Fortnites 'uint64 AesEncryptExpand(FAesExpandedKey* OutExpandedKey, const FAESKey& UnexpandedKey)' */
-	void* AesEncryptExpandAddress = FindPattern("48 89 5C 24 ? 48 89 74 24 ? 48 89 7C 24 ? 0F B6 42 ? 48 8B F9");
+	void* FAESDecryptAddr = reinterpret_cast<void*>(GetImageBase() + 0xC95E50);
 	
-	/* 
-	* If 'AesEncryptExpandAddress' wasn't found try looking for 'uint64 AesDecryptExpand(FAesExpandedKey* OutExpandedKey, const FAESKey& UnexpandedKey)'.
-	* 
-	* We can do this because the function signature (return type and parameters) is the same on both functions, so we can re-use our hook.
-	*/
-	if (AesEncryptExpandAddress == nullptr)
-		AesEncryptExpandAddress = FindPattern("40 53 48 83 EC ? 48 8B D9 E8 ? ? ? ? 45 33 DB 44 8B D0");
+	std::cout << "Addr: " << FAESDecryptAddr << std::endl;
 
-	std::cout << "AesEncryptExpandAddress: " << AesEncryptExpandAddress << std::endl;
-	
-	MH_STATUS CreateHookStatus = MH_CreateHook(AesEncryptExpandAddress, ExpandAESKeyHook, reinterpret_cast<void**>(&OriginalExpandAESKey));
+	MH_STATUS CreateHookStatus = MH_CreateHook(FAESDecryptAddr, DecryptDataHook, reinterpret_cast<void**>(&OgDecryptData));
 	if (CreateHookStatus != MH_OK)
 	{
 		std::cout << "MH_Initialize failed: " << MH_StatusToString(CreateHookStatus) << std::endl;
 		return 0;
 	}
 	
-	MH_STATUS EnableHookStatus = MH_EnableHook(AesEncryptExpandAddress);
+	MH_STATUS EnableHookStatus = MH_EnableHook(FAESDecryptAddr);
 	if (EnableHookStatus != MH_OK)
 	{
 		std::cout << "MH_Initialize failed: " << MH_StatusToString(EnableHookStatus) << std::endl;
